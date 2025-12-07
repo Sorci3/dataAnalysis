@@ -34,14 +34,11 @@ def clean_feature_names(df):
     return df
 
 def prepare_data_for_training(path_train_csv, path_labels_csv):
-    """
-    Charge les données, nettoie et splitte.
-    CORRECTIF : Charge 'y' comme Série pour garder les index alignés.
-    """
     print("Chargement des données...")
     X = pd.read_csv(path_train_csv)
-    # Important : On charge y comme une Series (avec index)
-    y = pd.read_csv(path_labels_csv).iloc[:, 0] 
+    
+    # ✅ IMPORTANT : Charger comme Series (avec index)
+    y = pd.read_csv(path_labels_csv).squeeze()  # .squeeze() pour Series
     
     print("Nettoyage des noms de colonnes...")
     X = clean_feature_names(X)
@@ -51,6 +48,13 @@ def prepare_data_for_training(path_train_csv, path_labels_csv):
     X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
+    
+    # ✅ CRITIQUE : Réinitialiser les index pour éviter les décalages
+    X_train = X_train.reset_index(drop=True)
+    X_val = X_val.reset_index(drop=True)
+    y_train = y_train.reset_index(drop=True)
+    y_val = y_val.reset_index(drop=True)
+    
     return X_train, X_val, y_train, y_val
 
 def train_cv_and_log(model, X, y, experiment_name, run_name, n_splits=5):
