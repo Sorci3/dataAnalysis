@@ -5,6 +5,8 @@ import seaborn as sns
 import pandas as pd
 import numpy as np
 import re
+import os
+import shutil
 
 # Imports Scikit-Learn
 from sklearn.model_selection import StratifiedKFold, train_test_split
@@ -15,6 +17,8 @@ import optuna
 from optuna.integration.mlflow import MLflowCallback
 import lightgbm as lgb
 
+
+from mlflow.models.signature import infer_signature
 # Gestion des imports de métriques locales
 try:
     from metrics import get_metrics, custom_business_cost
@@ -101,8 +105,20 @@ def train_cv_and_log(model, X, y, experiment_name, run_name, n_splits=5):
         
         # Sauvegarde du modèle ré-entraîné sur tout le dataset
         model.fit(X, y)
-        try: mlflow.sklearn.log_model(model, "model")
-        except: pass
+        # On montre à MLflow un exemple d'entrée (X) et de sortie (predict)
+        # pour qu'il comprenne que les colonnes sont des Float, pas des Objets.
+        signature = infer_signature(X, model.predict(X))
+        
+        try: 
+            mlflow.sklearn.log_model(
+                model, 
+                "model",
+                signature=signature,       # <--- L'ARGUMENT VITAL
+                input_example=X.iloc[:5]   # Bonus : ajoute un exemple dans la doc
+            )
+        except Exception as e: 
+            print(f"Erreur lors du log MLflow : {e}")
+            pass
         
         return model, avg_cost
 
@@ -186,3 +202,93 @@ def plot_business_cost_threshold(y_true, y_proba):
     plt.xlabel("Seuil")
     plt.ylabel("Coût Métier")
     return plt.gcf(), best_thresh
+
+def export_model_to_folder(run_id=None, model_name=None, experiment_name=None, 
+                           target_folder="../model", tracking_uri=None):
+    """
+    Exporte un modèle MLflow vers un dossier local pour le Dockerfile.
+    
+    Cette fonction copie les fichiers nécessaires (MLmodel, model.pkl, conda.yaml, 
+    requirements.txt, python_env.yaml) depuis MLflow vers le dossier spécifié.
+    
+    Paramètres:
+    -----------
+    run_id : str, optional
+        ID du run MLflow (ex: "af5897f2130b491a9c3ce5320561668f")
+        Si fourni, utilise ce run directement.
+    model_name : str, optional
+        Nom du modèle dans le registry MLflow (ex: "model")
+        Nécessite experiment_name si utilisé.
+    experiment_name : str, optional
+        Nom de l'expérience MLflow (ex: "Credit_Scoring_Final")
+        Nécessaire si model_name est utilisé.
+    target_folder : str, default="model"
+        Dossier de destination pour les fichiers du modèle.
+    tracking_uri : str, optional
+        URI du tracking MLflow (ex: "file:../mlruns")
+        Si None, utilise la configuration actuelle.
+    
+    Retourne:
+    --------
+    str : Chemin du dossier de destination
+    
+    Exemples:
+    --------
+    # Option 1 : Exporter depuis un run_id spécifique
+    export_model_to_folder(run_id="af5897f2130b491a9c3ce5320561668f")
+    
+    # Option 2 : Exporter depuis le registry MLflow
+    export_model_to_folder(
+        model_name="model",
+        experiment_name="Credit_Scoring_Final"
+    )
+    """
+    if tracking_uri:
+        mlflow.set_tracking_uri(tracking_uri)
+    
+    # Déterminer le chemin source du modèle
+    if run_id:
+        # Option 1 : Utiliser directement un run_id
+        model_uri = f"runs:/{run_id}/model"
+        print(f"Export depuis run_id: {run_id}")
+    elif model_name and experiment_name:
+        # Option 2 : Utiliser le registry MLflow
+        mlflow.set_experiment(experiment_name)
+        # Récupérer le dernier modèle enregistré avec ce nom
+        client = mlflow.tracking.MlflowClient()
+        model_version = client.get_latest_versions(model_name, stages=["None"])[0]
+        model_uri = f"models:/{model_name}/{model_version.version}"
+        print(f"Export depuis registry: {model_name} (version {model_version.version})")
+    else:
+        raise ValueError("Vous devez fournir soit 'run_id', soit 'model_name' + 'experiment_name'")
+    
+    # Créer le dossier de destination s'il n'existe pas
+    os.makedirs(target_folder, exist_ok=True)
+    
+    # Télécharger le modèle depuis MLflow vers un dossier temporaire
+    print(f"Téléchargement du modèle depuis MLflow...")
+    temp_download_path = mlflow.artifacts.download_artifacts(artifact_uri=model_uri)
+    
+    # Copier les fichiers nécessaires vers le dossier cible
+    print(f"Copie des fichiers vers {target_folder}/...")
+    required_files = ["MLmodel", "model.pkl", "conda.yaml", "requirements.txt", "python_env.yaml"]
+    
+    for file_name in required_files:
+        source_path = os.path.join(temp_download_path, file_name)
+        if os.path.exists(source_path):
+            dest_path = os.path.join(target_folder, file_name)
+            shutil.copy2(source_path, dest_path)
+            print(f"  ✓ {file_name}")
+        else:
+            print(f"  ⚠ {file_name} non trouvé (optionnel)")
+    
+    # Nettoyer le dossier temporaire
+    try:
+        shutil.rmtree(temp_download_path)
+    except:
+        pass
+    
+    print(f"\n✅ Modèle exporté avec succès vers {target_folder}/")
+    print(f"   Vous pouvez maintenant construire l'image Docker avec: docker build -t credit-scoring-model .")
+    
+    return os.path.abspath(target_folder)

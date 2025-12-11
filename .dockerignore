@@ -1,0 +1,12 @@
+.git
+.gitignore
+.venv
+__pycache__/
+*.pyc
+datasets/
+mlruns/
+notebooks/
+reports/
+Dockerfile
+
+
