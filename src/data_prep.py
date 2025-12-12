@@ -8,7 +8,22 @@ import os
 # --- 1. FONCTIONS UTILITAIRES (MEMOIRE & NETTOYAGE) ---
 
 def reduce_mem_usage(df):
-    """Réduit la taille du dataframe en ajustant les types de données."""
+    """
+    Réduit la taille du DataFrame en optimisant les types de données.
+    
+    Convertit les types int/float vers les plus petits types compatibles
+    (int8, int16, int32, float32) pour réduire l'utilisation mémoire.
+    
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame à optimiser
+        
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame avec les types optimisés
+    """
     start_mem = df.memory_usage().sum() / 1024**2
     
     for col in df.columns:
@@ -37,7 +52,23 @@ def reduce_mem_usage(df):
     return df
 
 def load_dataframe(path, filename, debug=False):
-    """Charge un CSV spécifique et réduit immédiatement sa mémoire."""
+    """
+    Charge un fichier CSV et optimise immédiatement sa mémoire.
+    
+    Parameters
+    ----------
+    path : str
+        Chemin vers le dossier contenant les fichiers CSV
+    filename : str
+        Nom du fichier (sans extension .csv)
+    debug : bool, default=False
+        Si True, charge uniquement les 10 000 premières lignes
+        
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame chargé et optimisé en mémoire
+    """
     file_path = os.path.join(path, f'{filename}.csv')
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"{filename}.csv introuvable dans {path}")
@@ -50,15 +81,53 @@ def load_dataframe(path, filename, debug=False):
 # --- 2. FONCTIONS METIERS ---
 
 def handle_anomalies(df):
+    """
+    Gère les anomalies connues dans les données.
+    
+    - Remplace la valeur anormale 365243 dans DAYS_EMPLOYED par NaN
+      et crée un flag DAYS_EMPLOYED_ANOM
+    - Convertit DAYS_BIRTH en valeurs positives (abs)
+    
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame à nettoyer
+        
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame avec les anomalies traitées
+    """
+    df = df.copy()  # Éviter les warnings de modification sur vue
     for col in df.columns:
         if 'DAYS_EMPLOYED' in col:
             df[f'{col}_ANOM'] = df[col] == 365243
-            df[col].replace({365243: np.nan}, inplace=True)
+            df[col] = df[col].replace({365243: np.nan})
     if 'DAYS_BIRTH' in df.columns:
         df['DAYS_BIRTH'] = abs(df['DAYS_BIRTH'])
     return df
 
 def engineer_domain_features(df):
+    """
+    Crée des features de domaine (ratios financiers) basées sur la connaissance métier.
+    
+    Features créées :
+    - CREDIT_INCOME_PERCENT : Ratio crédit / revenu
+    - ANNUITY_INCOME_PERCENT : Ratio annuité / revenu
+    - CREDIT_TERM : Ratio annuité / crédit
+    - DAYS_EMPLOYED_PERCENT : Ratio jours employés / jours depuis naissance
+    
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame contenant les colonnes nécessaires
+        
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame avec les nouvelles features ajoutées
+    """
+    df = df.copy()
     if 'AMT_CREDIT' in df.columns and 'AMT_INCOME_TOTAL' in df.columns:
         df['CREDIT_INCOME_PERCENT'] = df['AMT_CREDIT'] / df['AMT_INCOME_TOTAL']
     if 'AMT_ANNUITY' in df.columns and 'AMT_INCOME_TOTAL' in df.columns:
@@ -70,7 +139,29 @@ def engineer_domain_features(df):
     return df
 
 def encode_categorical(df, df_test=None):
+    """
+    Encode les variables catégorielles.
+    
+    - Label Encoding pour les variables binaires (≤2 catégories)
+    - One-Hot Encoding pour les autres variables catégorielles
+    - Aligne les colonnes entre train et test après encodage
+    
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame d'entraînement
+    df_test : pandas.DataFrame, optional
+        DataFrame de test (si fourni, aligne les colonnes)
+        
+    Returns
+    -------
+    pandas.DataFrame ou tuple
+        DataFrame(s) avec les variables catégorielles encodées
+    """
+    df = df.copy()
     le = LabelEncoder()
+    
+    # Label Encoding pour les variables binaires
     for col in df.columns:
         if df[col].dtype == 'object':
             if len(df[col].unique()) <= 2:
@@ -81,12 +172,15 @@ def encode_categorical(df, df_test=None):
                     df[col] = le.transform(df[col])
                     df_test[col] = le.transform(df_test[col])
     
+    # One-Hot Encoding pour toutes les variables catégorielles restantes
     df = pd.get_dummies(df)
     if df_test is not None:
         df_test = pd.get_dummies(df_test)
         train_labels = df['TARGET'] if 'TARGET' in df.columns else None
+        # Alignement des colonnes (inner join pour garder uniquement les colonnes communes)
         df, df_test = df.align(df_test, join='inner', axis=1)
-        if train_labels is not None: df['TARGET'] = train_labels
+        if train_labels is not None:
+            df['TARGET'] = train_labels
         return df, df_test
     return df
 
@@ -293,8 +387,22 @@ def load_and_process_all_data(path_relative_to_root='datasets', debug=False):
     return app_train, app_test
 
 def missing_values_table(df):
+    """
+    Génère un tableau récapitulatif des valeurs manquantes.
+    
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame à analyser
+        
+    Returns
+    -------
+    pandas.DataFrame
+        Tableau avec les colonnes ayant des valeurs manquantes,
+        triées par pourcentage décroissant
+    """
     mis_val = df.isnull().sum()
     mis_val_percent = 100 * df.isnull().sum() / len(df)
     mis_val_table = pd.concat([mis_val, mis_val_percent], axis=1)
-    mis_val_table = mis_val_table.rename(columns = {0 : 'Missing Values', 1 : '% of Total Values'})
-    return mis_val_table[mis_val_table.iloc[:,1] != 0].sort_values('% of Total Values', ascending=False).round(1)
+    mis_val_table = mis_val_table.rename(columns={0: 'Missing Values', 1: '% of Total Values'})
+    return mis_val_table[mis_val_table.iloc[:, 1] != 0].sort_values('% of Total Values', ascending=False).round(1)

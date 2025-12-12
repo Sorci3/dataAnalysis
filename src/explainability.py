@@ -5,7 +5,23 @@ import numpy as np
 
 def plot_shap_global(model, X_sample):
     """
-    Affiche l'importance globale des variables (SHAP Summary Plot).
+    Affiche l'importance globale des variables avec SHAP (Summary Plot).
+    
+    Utilise TreeExplainer pour les modèles tree-based (LightGBM, XGBoost, etc.)
+    ou LinearExplainer pour les modèles linéaires.
+    
+    Parameters
+    ----------
+    model : sklearn-like model
+        Modèle entraîné (doit avoir une méthode predict_proba ou predict)
+    X_sample : pandas.DataFrame ou numpy.ndarray
+        Échantillon de données pour calculer les valeurs SHAP
+        (recommandé : 100-1000 échantillons pour la performance)
+        
+    Returns
+    -------
+    matplotlib.figure.Figure
+        Figure contenant le plot SHAP
     """
     print("Calcul des valeurs SHAP globales (cela peut prendre du temps)...")
     
@@ -37,44 +53,45 @@ def plot_shap_global(model, X_sample):
     plt.tight_layout()
     return plt.gcf()
 
-"""def plot_shap_local(model, X_sample, client_index=0):
+def plot_shap_local(model, X_sample, client_index=0):
+    """
+    Affiche l'explication locale (Waterfall Plot) pour un client spécifique.
     
-    Affiche l'explication locale (Waterfall) pour un client donné.
+    Montre comment chaque feature contribue à la prédiction pour un client donné.
+    Utile pour comprendre pourquoi un client a été classé comme à risque ou non.
     
+    Parameters
+    ----------
+    model : sklearn-like model
+        Modèle entraîné
+    X_sample : pandas.DataFrame ou numpy.ndarray
+        Échantillon de données (doit contenir le client à l'index spécifié)
+    client_index : int, default=0
+        Index du client à expliquer dans X_sample
+        
+    Returns
+    -------
+    matplotlib.figure.Figure
+        Figure contenant le waterfall plot SHAP
+    """
     print(f"Calcul du SHAP local pour le client à l'index {client_index}...")
     
-    # Pour le plot "waterfall", on a besoin de l'objet Explanation complet
-    explainer = shap.TreeExplainer(model)
-    shap_values_obj = explainer(X_sample) # Retourne un objet Explanation
-    
-    # Focus sur la classe 1 (Défaut)
-    # L'objet Explanation contient souvent les valeurs brutes (log-odds)
-    
-    plt.figure(figsize=(8, 6))
-    # On visualise la prédiction pour la classe 1 du client spécifié
-    # shap_values_obj[index, :, classe] (la syntaxe peut varier selon la version de SHAP)
-    
+    # Création de l'explainer
     try:
-        # Syntaxe standard pour TreeExplainer récent
-        shap.plots.waterfall(shap_values_obj[client_index], show=False)
-    except:
-        # Fallback si l'objet a une structure différente (souvent le cas avec LightGBM binaire)
-        shap.plots.waterfall(shap_values_obj[client_index, :, 1], show=False)
-        
-    plt.title(f"Impact des features pour le client {client_index}")
-    plt.tight_layout()
-    return plt.gcf()"""
-
-def plot_shap_local(model, X_sample, client_index=0):
-    # ... (code précédent)
+        explainer = shap.TreeExplainer(model)
+    except Exception:
+        explainer = shap.LinearExplainer(model, X_sample)
     
-    # Récupérer la probabilité réelle calculée par le modèle
+    # Calcul des valeurs SHAP
+    shap_values_obj = explainer(X_sample)
+    
+    # Récupération de la probabilité prédite
     proba = model.predict_proba(X_sample)[client_index, 1]
     
-    plt.figure()
-    shap.plots.waterfall(shap_values_obj[client_index])
-    
-    # On ajoute la probabilité lisible dans le titre
-    plt.title(f"Client {client_index} - Risque de défaut : {proba:.1%}")
+    # Visualisation waterfall
+    plt.figure(figsize=(10, 8))
+    shap.plots.waterfall(shap_values_obj[client_index], show=False)
+    plt.title(f"Client {client_index} - Risque de défaut : {proba:.1%}", 
+              fontsize=14, fontweight='bold')
     plt.tight_layout()
     return plt.gcf()
