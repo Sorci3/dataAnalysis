@@ -7,6 +7,7 @@ import numpy as np
 import re
 import os
 import shutil
+import xgboost as xgb
 
 # Imports Scikit-Learn
 from sklearn.model_selection import StratifiedKFold, train_test_split
@@ -181,6 +182,85 @@ def optimize_hyperparameters_optuna(X_train, y_train, experiment_name, n_trials=
     best_params['n_estimators'] = int(best_params['n_estimators'])
     best_params['num_leaves'] = int(best_params['num_leaves'])
     best_params['max_depth'] = int(best_params['max_depth'])
+    
+    return best_params
+
+def optimize_hyperparameters_xgboost(X_train, y_train, experiment_name, n_trials=20):
+    """
+    Optimise XGBoost avec Optuna (Bayésien + Pruning).
+    """
+    print(f"--- Optimisation Optuna XGBoost ({n_trials} essais) ---")
+
+    # Calcul du ratio pour scale_pos_weight (équivalent de is_unbalance=True)
+    ratio_equilibrage = (y_train == 0).sum() / (y_train == 1).sum()
+
+    def objective(trial):
+        # 1. Définition de l'espace de recherche
+        param = {
+            'objective': 'binary:logistic',
+            'eval_metric': 'auc',
+            'verbosity': 0,
+            'n_jobs': -1,
+            'random_state': 42,
+            'scale_pos_weight': ratio_equilibrage, # Gestion du déséquilibre
+            'booster': 'gbtree',
+            
+            # Paramètres à optimiser
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
+            'max_depth': trial.suggest_int('max_depth', 3, 10),
+            'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),
+            'gamma': trial.suggest_float('gamma', 0, 5),
+            'subsample': trial.suggest_float('subsample', 0.5, 1.0),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
+            'reg_alpha': trial.suggest_float('reg_alpha', 1e-8, 10.0, log=True),
+            'reg_lambda': trial.suggest_float('reg_lambda', 1e-8, 10.0, log=True),
+        }
+        
+        # Le nombre d'arbres est géré à part dans xgb.cv via num_boost_round
+        n_estimators = trial.suggest_int('n_estimators', 400, 1000)
+
+        # 2. Dataset XGBoost interne
+        dtrain = xgb.DMatrix(X_train, label=y_train)
+
+        # 3. Callback de Pruning pour arrêter les mauvais essais
+        pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "test-auc")
+
+        # 4. Cross-Validation interne
+        history = xgb.cv(
+            param, 
+            dtrain, 
+            num_boost_round=n_estimators, 
+            nfold=3, 
+            stratified=True,
+            early_stopping_rounds=50,
+            callbacks=[pruning_callback],
+            seed=42,
+            verbose_eval=False
+        )
+
+        # xgb.cv renvoie un DataFrame. On prend la dernière valeur de l'AUC moyenne sur le test set.
+        # Attention : la colonne s'appelle 'test-auc-mean'
+        return history['test-auc-mean'].iloc[-1]
+
+    # Configuration MLflow
+    mlflow.set_experiment(experiment_name)
+    
+    # Lancement de l'étude
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=n_trials, n_jobs=1)
+    
+    print(f"Meilleurs params: {study.best_params}")
+    
+    # Préparation des paramètres finaux pour Sklearn
+    best_params = study.best_params
+    best_params['n_estimators'] = int(best_params['n_estimators'])
+    best_params['max_depth'] = int(best_params['max_depth'])
+    best_params['min_child_weight'] = int(best_params['min_child_weight'])
+    
+    # On rajoute les paramètres fixes qui n'étaient pas dans l'optimisation
+    best_params['objective'] = 'binary:logistic'
+    best_params['eval_metric'] = 'auc'
+    best_params['scale_pos_weight'] = ratio_equilibrage
     
     return best_params
 
