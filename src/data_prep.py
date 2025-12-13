@@ -187,7 +187,30 @@ def encode_categorical(df, df_test=None):
 # --- 3. FONCTIONS D'AGRÉGATION (CORRIGEES) ---
 
 def agg_numeric(df, parent_var, df_name):
-    """Agrégation numérique robuste."""
+    """
+    Agrège les colonnes numériques d'un DataFrame avec plusieurs statistiques descriptives.
+
+    Sélectionne toutes les colonnes numériques du DataFrame, effectue un groupby
+    sur la variable parent et calcule les statistiques count, mean, max, min et sum
+    pour chaque colonne. Les noms des colonnes résultantes suivent le format
+    '{df_name}_{colonne}_{statistique}'.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame contenant les données à agréger
+    parent_var : str
+        Nom de la colonne servant de clé de regroupement
+    df_name : str
+        Préfixe utilisé pour nommer les colonnes agrégées dans le DataFrame résultant
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame agrégé avec parent_var comme colonne et les statistiques
+        calculées pour chaque variable numérique
+
+    """
     # 1. Sélectionner les colonnes numériques + la clé
     cols_to_keep = [parent_var] + list(df.select_dtypes('number').columns)
     numeric_df = df[list(set(cols_to_keep))].copy()
@@ -205,7 +228,33 @@ def agg_numeric(df, parent_var, df_name):
     return agg
 
 def agg_categorical(df, parent_var, df_name):
-    """Agrégation catégorielle robuste."""
+    """
+    Agrège les colonnes catégorielles d'un DataFrame via encodage one-hot.
+
+    Encode les variables catégorielles en variables binaires (one-hot encoding),
+    puis agrège ces variables par parent_var en calculant la somme (count) et
+    la moyenne (count_norm) pour chaque catégorie. Si aucune colonne catégorielle
+    n'existe, retourne un DataFrame contenant uniquement les valeurs uniques
+    de parent_var.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame contenant les données à agréger
+    parent_var : str
+        Nom de la colonne servant de clé de regroupement
+    df_name : str
+        Préfixe utilisé pour nommer les colonnes agrégées dans le DataFrame résultant
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame agrégé avec parent_var comme colonne et les statistiques
+        d'encodage (count et count_norm) pour chaque modalité catégorielle.
+        Si aucune colonne catégorielle n'existe, retourne uniquement parent_var
+        avec ses valeurs uniques
+    """
+
     categorical_cols = df.select_dtypes('object').columns
     
     # Cas où il n'y a pas de catégories (ex: installments_payments)
@@ -233,8 +282,31 @@ def agg_categorical(df, parent_var, df_name):
     return categorical_grouped
 
 def aggregate_client(df, group_vars, df_names):
-    """Agrégation Niveau 3 -> Niveau 2 -> Niveau 1"""
-    
+    """
+    Agrège les données en deux niveaux hiérarchiques (prêt puis client).
+
+    Effectue une agrégation en cascade : d'abord au niveau du prêt individuel
+    (group_vars[0]), puis au niveau du client (group_vars[1]). Combine les
+    agrégations numériques et catégorielles à chaque niveau. Optimise la mémoire
+    en supprimant les DataFrames intermédiaires après usage.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame contenant les données à agréger avec au moins deux niveaux
+        hiérarchiques
+    group_vars : list of str
+        Liste de deux éléments : [variable_niveau_prêt, variable_niveau_client]
+    df_names : list of str
+        Liste de deux préfixes pour nommer les colonnes agrégées à chaque niveau
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame agrégé au niveau client avec toutes les statistiques calculées
+        sur les deux niveaux d'agrégation
+    """
+
     # 1. Agréger sur SK_ID_PREV (ou équivalent)
     df_agg = agg_numeric(df, parent_var=group_vars[0], df_name=df_names[0])
     df_counts = agg_categorical(df, parent_var=group_vars[0], df_name=df_names[0])
@@ -263,12 +335,30 @@ def aggregate_client(df, group_vars, df_names):
     del df, df_by_loan, loan_to_client_id; gc.collect()
     return df_by_client
 
-# --- 4. FONCTION MAITRESSE ---
+# --- 4. FONCTION PRINCIPALE ---
 
 def merge_and_clean(df_main, df_agg):
-    """Fusionne df_agg dans df_main sur la colonne commune (SK_ID_CURR)."""
-    # df_agg doit avoir SK_ID_CURR en colonne (garanti par nos nouvelles fonctions)
-    
+    """
+    Fusionne un DataFrame principal avec un DataFrame agrégé et nettoie la mémoire.
+
+    Effectue une jointure gauche (left join) entre le DataFrame principal et
+    le DataFrame agrégé en utilisant une clé commune. Privilégie 'SK_ID_CURR'
+    comme clé de jointure si disponible, sinon utilise la première colonne commune
+    trouvée. Libère la mémoire en supprimant le DataFrame agrégé après fusion.
+
+    Parameters
+    ----------
+    df_main : pandas.DataFrame
+        DataFrame principal auquel ajouter les colonnes agrégées
+    df_agg : pandas.DataFrame
+        DataFrame agrégé contenant les nouvelles features à fusionner
+
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame principal enrichi avec les colonnes du DataFrame agrégé.
+        Retourne df_main inchangé si aucune colonne commune n'est trouvée
+    """
     # Trouver le nom de la clé de jointure (c'est la colonne commune)
     common_cols = list(set(df_main.columns) & set(df_agg.columns))
     if not common_cols:
@@ -283,6 +373,32 @@ def merge_and_clean(df_main, df_agg):
     return df_main
 
 def load_and_process_all_data(path_relative_to_root='datasets', debug=False):
+    """
+    Charge et traite l'ensemble des données du projet Home Credit Default Risk.
+
+    Pipeline complet qui charge tous les fichiers de données, effectue les
+    agrégations hiérarchiques nécessaires, fusionne les tables selon leur
+    structure relationnelle (bureau->client, previous->mensuel->client),
+    encode les variables catégorielles et optimise l'utilisation mémoire.
+    Retourne les datasets train et test prêts pour la modélisation.
+
+    Parameters
+    ----------
+    path_relative_to_root : str, default='datasets'
+        Chemin relatif depuis la racine du projet vers le dossier contenant
+        les fichiers de données
+    debug : bool, default=False
+        Si True, charge uniquement un échantillon réduit des données pour
+        faciliter les tests et le débogage
+
+    Returns
+    -------
+    tuple of (pandas.DataFrame, pandas.DataFrame)
+        - app_train : DataFrame d'entraînement avec toutes les features agrégées
+          et la colonne TARGET
+        - app_test : DataFrame de test avec les mêmes features (sans TARGET)
+        Retourne (None, None) en cas d'erreur critique lors du chargement
+    """
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
     root_dir = os.path.join(script_dir, '..')
