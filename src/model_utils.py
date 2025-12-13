@@ -1,4 +1,3 @@
-import mlflow
 import mlflow.sklearn
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -8,23 +7,21 @@ import re
 import os
 import shutil
 import xgboost as xgb
-
-# Imports Scikit-Learn
-from sklearn.model_selection import StratifiedKFold, train_test_split
-from sklearn.metrics import confusion_matrix, roc_curve, auc, make_scorer
-
-# Imports Optuna
+import mlflow
 import optuna
 from optuna.integration.mlflow import MLflowCallback
 import lightgbm as lgb
 
+from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.metrics import confusion_matrix, roc_curve, auc, make_scorer
 
 from mlflow.models.signature import infer_signature
-# Gestion des imports de métriques locales
 try:
     from metrics import get_metrics, custom_business_cost
 except ImportError:
     from src.metrics import get_metrics, custom_business_cost
+
+
 
 def clean_feature_names(df):
     """Nettoie les noms de colonnes pour LightGBM."""
@@ -38,12 +35,14 @@ def clean_feature_names(df):
     df.columns = new_columns
     return df
 
+
+
+
 def prepare_data_for_training(path_train_csv, path_labels_csv):
     print("Chargement des données...")
     X = pd.read_csv(path_train_csv)
     
-    # ✅ IMPORTANT : Charger comme Series (avec index)
-    y = pd.read_csv(path_labels_csv).squeeze()  # .squeeze() pour Series
+    y = pd.read_csv(path_labels_csv).squeeze()  
     
     print("Nettoyage des noms de colonnes...")
     X = clean_feature_names(X)
@@ -54,13 +53,16 @@ def prepare_data_for_training(path_train_csv, path_labels_csv):
         X, y, test_size=0.2, random_state=42, stratify=y
     )
     
-    # ✅ CRITIQUE : Réinitialiser les index pour éviter les décalages
     X_train = X_train.reset_index(drop=True)
     X_val = X_val.reset_index(drop=True)
     y_train = y_train.reset_index(drop=True)
     y_val = y_val.reset_index(drop=True)
     
     return X_train, X_val, y_train, y_val
+
+
+
+
 
 def train_cv_and_log(model, X, y, experiment_name, run_name, n_splits=5, 
                      model_name=None, description=None, tags=None):
@@ -76,7 +78,6 @@ def train_cv_and_log(model, X, y, experiment_name, run_name, n_splits=5,
     
     with mlflow.start_run(run_name=run_name) as run:
         
-        # --- 1. Configuration & Tags ---
         mlflow.set_tag("model_type", type(model).__name__)
         mlflow.set_tag("validation_strategy", f"CV_{n_splits}_Folds")
         if description: mlflow.set_tag("mlflow.note.content", description)
@@ -84,10 +85,8 @@ def train_cv_and_log(model, X, y, experiment_name, run_name, n_splits=5,
         
         print(f"--- Cross-Validation ({n_splits} folds) : {run_name} ---")
         
-        # --- 2. Boucle de Validation Croisée ---
         cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         
-        # Dictionnaire pour accumuler les scores de chaque pli
         fold_scores = {
             "business_cost": [],
             "auc": [],
@@ -96,12 +95,10 @@ def train_cv_and_log(model, X, y, experiment_name, run_name, n_splits=5,
             "precision": []
         }
         
-        # Conversion sécurisée en numpy arrays pour le slicing
         X_arr = X.values if isinstance(X, pd.DataFrame) else X
         y_arr = y.values if isinstance(y, pd.Series) else y
 
         for i, (train_idx, val_idx) in enumerate(cv.split(X_arr, y_arr)):
-            # Création des folds
             if isinstance(X, pd.DataFrame):
                 X_fold_train, X_fold_val = X.iloc[train_idx], X.iloc[val_idx]
                 y_fold_train, y_fold_val = y.iloc[train_idx], y.iloc[val_idx]
@@ -109,10 +106,8 @@ def train_cv_and_log(model, X, y, experiment_name, run_name, n_splits=5,
                 X_fold_train, X_fold_val = X_arr[train_idx], X_arr[val_idx]
                 y_fold_train, y_fold_val = y_arr[train_idx], y_arr[val_idx]
             
-            # Entraînement sur le pli
             model.fit(X_fold_train, y_fold_train)
             
-            # Prédictions
             try:
                 y_proba = model.predict_proba(X_fold_val)[:, 1]
             except:
@@ -120,17 +115,14 @@ def train_cv_and_log(model, X, y, experiment_name, run_name, n_splits=5,
             
             y_pred = model.predict(X_fold_val)
             
-            # --- CALCUL DES MÉTRIQUES (Tout via get_metrics) ---
             m = get_metrics(y_fold_val, y_pred, y_proba)
             
-            # On remplit les listes (avec .get(..., 0) pour la sécurité)
             fold_scores["business_cost"].append(m.get('business_cost', 0))
             fold_scores["auc"].append(m.get('auc', 0))
-            fold_scores["f1_score"].append(m.get('f1', 0))
+            fold_scores["f1"].append(m.get('f1', 0))
             fold_scores["recall"].append(m.get('recall', 0))
             fold_scores["precision"].append(m.get('precision', 0))
 
-        # --- 3. Agrégation des Résultats (Moyenne & Ecart-Type) ---
         final_metrics = {}
         print(f"  >> Résultats CV (Moyenne ± Std):")
         
@@ -138,25 +130,18 @@ def train_cv_and_log(model, X, y, experiment_name, run_name, n_splits=5,
             mean_val = np.mean(values)
             std_val = np.std(values)
             
-            # Stockage pour le return et les métadonnées
             final_metrics[metric_name] = mean_val
             
-            # Logging MLflow (Moyenne ET Ecart-type)
             mlflow.log_metric(f"cv_mean_{metric_name}", mean_val)
             mlflow.log_metric(f"cv_std_{metric_name}", std_val)
             
-            # Affichage console pour vérification rapide
             print(f"     - {metric_name:<15}: {mean_val:.4f} ± {std_val:.4f}")
 
-        # Logging des hyperparamètres
         mlflow.log_params(model.get_params())
         
-        # --- 4. Entraînement Final sur TOUT le dataset ---
         print("  >> Entraînement final sur l'ensemble du dataset (Production)...")
         model.fit(X, y)
         
-        # --- 5. Sauvegarde et Enregistrement ---
-        # Signature
         if isinstance(X, pd.DataFrame):
             input_example = X.iloc[:5]
             prediction = model.predict(X.iloc[:5])
@@ -165,8 +150,7 @@ def train_cv_and_log(model, X, y, experiment_name, run_name, n_splits=5,
             prediction = model.predict(X[:5])
             
         signature = infer_signature(input_example, prediction)
-        
-        # Métadonnées pour Docker (Performance attendue)
+
         model_metadata = {
             "cv_auc_mean": f"{final_metrics['auc']:.4f}",
             "cv_f1_mean": f"{final_metrics['f1']:.4f}",
@@ -176,23 +160,20 @@ def train_cv_and_log(model, X, y, experiment_name, run_name, n_splits=5,
         if description: model_metadata["description"] = description
 
         try: 
-            # Log du modèle (Artefact)
             mlflow.sklearn.log_model(
                 model, 
-                "model", # Nom standard du dossier
+                "model", 
                 signature=signature,
                 input_example=input_example,
                 metadata=model_metadata 
             )
-            print(f"  ✅ Modèle sauvegardé dans MLflow (Run ID: {run.info.run_id})")
+            print(f" Modèle sauvegardé dans MLflow (Run ID: {run.info.run_id})")
 
-            # Enregistrement dans le Registry (Versioning)
             if model_name:
                 model_uri = f"runs:/{run.info.run_id}/model"
                 mv = mlflow.register_model(model_uri, model_name)
-                print(f"  ✅ Modèle versionné : {model_name} (v{mv.version})")
+                print(f" Modèle versionné : {model_name} (v{mv.version})")
                 
-                # Mise à jour de la description de la version dans le registre
                 if description:
                     client = mlflow.tracking.MlflowClient()
                     client.update_model_version(
@@ -202,36 +183,31 @@ def train_cv_and_log(model, X, y, experiment_name, run_name, n_splits=5,
                     )
                     
         except Exception as e: 
-            print(f"  ⚠️ Attention : Problème lors du log/registry MLflow : {e}")
+            print(f"Attention : Problème lors du log/registry MLflow : {e}")
         
-        # On retourne le modèle final et le coût moyen
         return model, final_metrics['business_cost']
-        
-import mlflow
-import optuna
-from optuna.integration.mlflow import MLflowCallback
-import lightgbm as lgb
+    
+
+
+
+
+
 
 def optimize_hyperparameters_optuna(X_train, y_train, experiment_name, n_trials=20):
     """
     Optimise LightGBM avec Optuna + Logging Manuel (Compatible toutes versions).
     """
-    # 1. Sécurité : Fermer les runs zombies
     if mlflow.active_run():
         print(f"⚠️ Fermeture du run actif précédent : {mlflow.active_run().info.run_id}")
         mlflow.end_run()
 
-    # 2. Désactiver l'autologging global pour éviter le spam de fichiers
     mlflow.lightgbm.autolog(disable=True)
     
     print(f"--- Optimisation Optuna LightGBM ({n_trials} essais) ---")
 
     def objective(trial):
-        # A. Création d'un Run ENFANT (nested=True est la clé)
-        # Cela permet de créer un sous-run pour chaque essai à l'intérieur du run principal
         with mlflow.start_run(nested=True, run_name=f"Trial_{trial.number}"):
             
-            # Paramètres à tester
             param = {
                 'objective': 'binary',
                 'metric': 'auc',
@@ -250,15 +226,12 @@ def optimize_hyperparameters_optuna(X_train, y_train, experiment_name, n_trials=
                 'subsample': trial.suggest_float('subsample', 0.5, 1.0)
             }
             
-            # Logging des paramètres de cet essai
             mlflow.log_params(param)
             
             dtrain = lgb.Dataset(X_train, label=y_train)
             
-            # Callback de Pruning (interne à LightGBM, pas MLflow)
             pruning_callback = optuna.integration.LightGBMPruningCallback(trial, "auc")
             
-            # Entraînement (Cross-Validation interne)
             history = lgb.cv(
                 param, dtrain, nfold=3, stratified=True,
                 callbacks=[pruning_callback]
@@ -266,28 +239,23 @@ def optimize_hyperparameters_optuna(X_train, y_train, experiment_name, n_trials=
             
             auc_score = history['valid auc-mean'][-1]
             
-            # B. Logging du résultat de l'essai
             mlflow.log_metric("auc", auc_score)
             
             return auc_score
 
-    # 3. Lancement du Run PARENT
     mlflow.set_experiment(experiment_name)
     
     with mlflow.start_run(run_name="Optuna_LightGBM_Search"):
-        # On lie l'étude à l'expérience pour la propreté
         study = optuna.create_study(
             study_name=experiment_name, 
             direction="maximize"
         )
         
         try:
-            # Note: On a retiré 'callbacks=[mlflow_callback]' car on loggue manuellement dans objective
             study.optimize(objective, n_trials=n_trials, n_jobs=1)
         except Exception as e:
-            print(f"⚠️ Interruption ou Erreur : {e}")
+            print(f"Interruption ou Erreur : {e}")
 
-        # 4. Graphiques d'analyse (Sauvegardés dans le run parent)
         print("Génération des graphiques d'analyse...")
         try:
             from optuna.visualization import plot_optimization_history, plot_param_importances
@@ -302,7 +270,6 @@ def optimize_hyperparameters_optuna(X_train, y_train, experiment_name, n_trials=
 
     print(f"Meilleurs params: {study.best_params}")
     
-    # 5. Nettoyage et retour
     best_params = study.best_params
     best_params['n_estimators'] = int(best_params['n_estimators'])
     best_params['num_leaves'] = int(best_params['num_leaves'])
@@ -310,11 +277,9 @@ def optimize_hyperparameters_optuna(X_train, y_train, experiment_name, n_trials=
     
     return best_params
 
-import xgboost as xgb
-import mlflow
-import optuna
-from optuna.integration.mlflow import MLflowCallback
-import pandas as pd
+
+
+
 
 def optimize_hyperparameters_xgboost(X_train, y_train, experiment_name, n_trials=20):
     """
@@ -323,32 +288,31 @@ def optimize_hyperparameters_xgboost(X_train, y_train, experiment_name, n_trials
     """
     print(f"--- Optimisation Optuna XGBoost ({n_trials} essais) ---")
 
-    # 1. Calcul du ratio pour gérer le déséquilibre de classe
-    # C'est l'équivalent du class_weight='balanced'
     count_0 = (y_train == 0).sum()
     count_1 = (y_train == 1).sum()
     ratio_equilibrage = count_0 / count_1
     print(f"   Ratio scale_pos_weight calculé : {ratio_equilibrage:.2f}")
 
-    # 2. Configuration du Callback MLflow
-    # On retire 'nest_trials' pour éviter le bug de version.
     mlflow_callback = MLflowCallback(
         tracking_uri=mlflow.get_tracking_uri(),
         metric_name="auc"
     )
 
+
+
+
+
+
     def objective(trial):
-        # 3. Définition de l'espace de recherche
         param = {
             'objective': 'binary:logistic',
             'eval_metric': 'auc',
             'verbosity': 0,
             'n_jobs': -1,
             'random_state': 42,
-            'scale_pos_weight': ratio_equilibrage, # Gestion du déséquilibre
+            'scale_pos_weight': ratio_equilibrage, 
             'booster': 'gbtree',
             
-            # Paramètres à optimiser
             'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
             'max_depth': trial.suggest_int('max_depth', 3, 10),
             'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),
@@ -359,17 +323,13 @@ def optimize_hyperparameters_xgboost(X_train, y_train, experiment_name, n_trials
             'reg_lambda': trial.suggest_float('reg_lambda', 1e-8, 10.0, log=True),
         }
         
-        # Le nombre d'arbres est géré via num_boost_round dans la CV
+
         n_estimators = trial.suggest_int('n_estimators', 400, 1000)
 
-        # 4. Création du Dataset interne XGBoost (DMatrix)
-        # Nécessaire pour la rapidité de xgb.cv
         dtrain = xgb.DMatrix(X_train, label=y_train)
 
-        # 5. Callback de Pruning (Arrêt précoce des essais non prometteurs)
         pruning_callback = optuna.integration.XGBoostPruningCallback(trial, "test-auc")
 
-        # 6. Validation Croisée interne
         history = xgb.cv(
             param, 
             dtrain, 
@@ -381,11 +341,9 @@ def optimize_hyperparameters_xgboost(X_train, y_train, experiment_name, n_trials
             seed=42,
             verbose_eval=False
         )
-
-        # xgb.cv renvoie un DataFrame, on récupère la meilleure AUC moyenne
         return history['test-auc-mean'].iloc[-1]
 
-    # 7. Lancement de l'étude
+
     mlflow.set_experiment(experiment_name)
     
     study = optuna.create_study(
@@ -401,19 +359,17 @@ def optimize_hyperparameters_xgboost(X_train, y_train, experiment_name, n_trials
             callbacks=[mlflow_callback]
         )
     except Exception as e:
-        print(f"⚠️ Erreur pendant l'optimisation : {e}")
+        print(f"Erreur pendant l'optimisation : {e}")
         print("Retour des meilleurs paramètres trouvés jusqu'ici.")
 
     print(f"Meilleurs params: {study.best_params}")
     
-    # 8. Nettoyage des paramètres pour Sklearn
-    # On convertit les floats en int pour les paramètres qui l'exigent
+
     best_params = study.best_params
     best_params['n_estimators'] = int(best_params['n_estimators'])
     best_params['max_depth'] = int(best_params['max_depth'])
     best_params['min_child_weight'] = int(best_params['min_child_weight'])
     
-    # On ajoute les paramètres fixes (non optimisés)
     best_params['objective'] = 'binary:logistic'
     best_params['eval_metric'] = 'auc'
     best_params['scale_pos_weight'] = ratio_equilibrage
@@ -421,6 +377,11 @@ def optimize_hyperparameters_xgboost(X_train, y_train, experiment_name, n_trials
     best_params['random_state'] = 42
     
     return best_params
+
+
+
+
+
 
 def plot_business_cost_threshold(y_true, y_proba):
     """Trace la courbe du coût métier vs seuil."""
@@ -440,6 +401,11 @@ def plot_business_cost_threshold(y_true, y_proba):
     plt.xlabel("Seuil")
     plt.ylabel("Coût Métier")
     return plt.gcf(), best_thresh
+
+
+
+
+
 
 def export_model_to_folder(run_id=None, model_name=None, experiment_name=None, 
                            target_folder="../model", tracking_uri=None):
@@ -484,15 +450,11 @@ def export_model_to_folder(run_id=None, model_name=None, experiment_name=None,
     if tracking_uri:
         mlflow.set_tracking_uri(tracking_uri)
     
-    # Déterminer le chemin source du modèle
     if run_id:
-        # Option 1 : Utiliser directement un run_id
         model_uri = f"runs:/{run_id}/model"
         print(f"Export depuis run_id: {run_id}")
     elif model_name and experiment_name:
-        # Option 2 : Utiliser le registry MLflow
         mlflow.set_experiment(experiment_name)
-        # Récupérer le dernier modèle enregistré avec ce nom
         client = mlflow.tracking.MlflowClient()
         model_version = client.get_latest_versions(model_name, stages=["None"])[0]
         model_uri = f"models:/{model_name}/{model_version.version}"
@@ -500,14 +462,11 @@ def export_model_to_folder(run_id=None, model_name=None, experiment_name=None,
     else:
         raise ValueError("Vous devez fournir soit 'run_id', soit 'model_name' + 'experiment_name'")
     
-    # Créer le dossier de destination s'il n'existe pas
     os.makedirs(target_folder, exist_ok=True)
     
-    # Télécharger le modèle depuis MLflow vers un dossier temporaire
     print(f"Téléchargement du modèle depuis MLflow...")
     temp_download_path = mlflow.artifacts.download_artifacts(artifact_uri=model_uri)
     
-    # Copier les fichiers nécessaires vers le dossier cible
     print(f"Copie des fichiers vers {target_folder}/...")
     required_files = ["MLmodel", "model.pkl", "conda.yaml", "requirements.txt", "python_env.yaml"]
     
@@ -516,17 +475,17 @@ def export_model_to_folder(run_id=None, model_name=None, experiment_name=None,
         if os.path.exists(source_path):
             dest_path = os.path.join(target_folder, file_name)
             shutil.copy2(source_path, dest_path)
-            print(f"  ✓ {file_name}")
+            print(f"   {file_name}")
         else:
-            print(f"  ⚠ {file_name} non trouvé (optionnel)")
+            print(f"   {file_name} non trouvé (optionnel)")
     
-    # Nettoyer le dossier temporaire
+
     try:
         shutil.rmtree(temp_download_path)
     except:
         pass
     
-    print(f"\n✅ Modèle exporté avec succès vers {target_folder}/")
+    print(f"\nModèle exporté avec succès vers {target_folder}/")
     print(f"   Vous pouvez maintenant construire l'image Docker avec: docker build -t credit-scoring-model .")
     
     return os.path.abspath(target_folder)
