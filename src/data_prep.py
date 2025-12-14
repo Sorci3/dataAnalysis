@@ -5,7 +5,6 @@ from sklearn.preprocessing import LabelEncoder
 import sys
 import os
 
-# --- 1. FONCTIONS UTILITAIRES (MEMOIRE & NETTOYAGE) ---
 
 def reduce_mem_usage(df):
     """
@@ -13,16 +12,6 @@ def reduce_mem_usage(df):
     
     Convertit les types int/float vers les plus petits types compatibles
     (int8, int16, int32, float32) pour réduire l'utilisation mémoire.
-    
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        DataFrame à optimiser
-        
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame avec les types optimisés
     """
     start_mem = df.memory_usage().sum() / 1024**2
     
@@ -54,20 +43,6 @@ def reduce_mem_usage(df):
 def load_dataframe(path, filename, debug=False):
     """
     Charge un fichier CSV et optimise immédiatement sa mémoire.
-    
-    Parameters
-    ----------
-    path : str
-        Chemin vers le dossier contenant les fichiers CSV
-    filename : str
-        Nom du fichier (sans extension .csv)
-    debug : bool, default=False
-        Si True, charge uniquement les 10 000 premières lignes
-        
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame chargé et optimisé en mémoire
     """
     file_path = os.path.join(path, f'{filename}.csv')
     if not os.path.exists(file_path):
@@ -78,7 +53,6 @@ def load_dataframe(path, filename, debug=False):
     df = pd.read_csv(file_path, nrows=nrows)
     return reduce_mem_usage(df)
 
-# --- 2. FONCTIONS METIERS ---
 
 def handle_anomalies(df):
     """
@@ -87,18 +61,8 @@ def handle_anomalies(df):
     - Remplace la valeur anormale 365243 dans DAYS_EMPLOYED par NaN
       et crée un flag DAYS_EMPLOYED_ANOM
     - Convertit DAYS_BIRTH en valeurs positives (abs)
-    
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        DataFrame à nettoyer
-        
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame avec les anomalies traitées
     """
-    df = df.copy()  # Éviter les warnings de modification sur vue
+    df = df.copy()
     for col in df.columns:
         if 'DAYS_EMPLOYED' in col:
             df[f'{col}_ANOM'] = df[col] == 365243
@@ -116,16 +80,6 @@ def engineer_domain_features(df):
     - ANNUITY_INCOME_PERCENT : Ratio annuité / revenu
     - CREDIT_TERM : Ratio annuité / crédit
     - DAYS_EMPLOYED_PERCENT : Ratio jours employés / jours depuis naissance
-    
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        DataFrame contenant les colonnes nécessaires
-        
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame avec les nouvelles features ajoutées
     """
     df = df.copy()
     if 'AMT_CREDIT' in df.columns and 'AMT_INCOME_TOTAL' in df.columns:
@@ -145,18 +99,6 @@ def encode_categorical(df, df_test=None):
     - Label Encoding pour les variables binaires (≤2 catégories)
     - One-Hot Encoding pour les autres variables catégorielles
     - Aligne les colonnes entre train et test après encodage
-    
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        DataFrame d'entraînement
-    df_test : pandas.DataFrame, optional
-        DataFrame de test (si fourni, aligne les colonnes)
-        
-    Returns
-    -------
-    pandas.DataFrame ou tuple
-        DataFrame(s) avec les variables catégorielles encodées
     """
     df = df.copy()
     le = LabelEncoder()
@@ -172,19 +114,18 @@ def encode_categorical(df, df_test=None):
                     df[col] = le.transform(df[col])
                     df_test[col] = le.transform(df_test[col])
     
-    # One-Hot Encoding pour toutes les variables catégorielles restantes
+    # One-Hot Encoding
     df = pd.get_dummies(df)
     if df_test is not None:
         df_test = pd.get_dummies(df_test)
         train_labels = df['TARGET'] if 'TARGET' in df.columns else None
-        # Alignement des colonnes (inner join pour garder uniquement les colonnes communes)
+        # Alignement des colonnes
         df, df_test = df.align(df_test, join='inner', axis=1)
         if train_labels is not None:
             df['TARGET'] = train_labels
         return df, df_test
     return df
 
-# --- 3. FONCTIONS D'AGRÉGATION (CORRIGEES) ---
 
 def agg_numeric(df, parent_var, df_name):
     """
@@ -194,35 +135,14 @@ def agg_numeric(df, parent_var, df_name):
     sur la variable parent et calcule les statistiques count, mean, max, min et sum
     pour chaque colonne. Les noms des colonnes résultantes suivent le format
     '{df_name}_{colonne}_{statistique}'.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        DataFrame contenant les données à agréger
-    parent_var : str
-        Nom de la colonne servant de clé de regroupement
-    df_name : str
-        Préfixe utilisé pour nommer les colonnes agrégées dans le DataFrame résultant
-
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame agrégé avec parent_var comme colonne et les statistiques
-        calculées pour chaque variable numérique
-
     """
-    # 1. Sélectionner les colonnes numériques + la clé
     cols_to_keep = [parent_var] + list(df.select_dtypes('number').columns)
     numeric_df = df[list(set(cols_to_keep))].copy()
     
-    # 2. Groupby (parent_var devient l'index)
     agg = numeric_df.groupby(parent_var).agg(['count', 'mean', 'max', 'min', 'sum'])
     
-    # 3. Aplatir les colonnes (MultiIndex) via une compréhension de liste
-    # Cela garantit que le nombre de nouveaux noms correspond EXACTEMENT au nombre de colonnes
     agg.columns = [f'{df_name}_{col[0]}_{col[1]}' for col in agg.columns]
     
-    # 4. Transformer l'index en colonne pour faciliter les merges futurs
     agg = agg.reset_index()
     
     return agg
@@ -233,33 +153,12 @@ def agg_categorical(df, parent_var, df_name):
 
     Encode les variables catégorielles en variables binaires (one-hot encoding),
     puis agrège ces variables par parent_var en calculant la somme (count) et
-    la moyenne (count_norm) pour chaque catégorie. Si aucune colonne catégorielle
-    n'existe, retourne un DataFrame contenant uniquement les valeurs uniques
-    de parent_var.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        DataFrame contenant les données à agréger
-    parent_var : str
-        Nom de la colonne servant de clé de regroupement
-    df_name : str
-        Préfixe utilisé pour nommer les colonnes agrégées dans le DataFrame résultant
-
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame agrégé avec parent_var comme colonne et les statistiques
-        d'encodage (count et count_norm) pour chaque modalité catégorielle.
-        Si aucune colonne catégorielle n'existe, retourne uniquement parent_var
-        avec ses valeurs uniques
+    la moyenne (count_norm) pour chaque catégorie.
     """
 
     categorical_cols = df.select_dtypes('object').columns
     
-    # Cas où il n'y a pas de catégories (ex: installments_payments)
     if len(categorical_cols) == 0:
-        # On retourne un DF avec juste la colonne ID unique pour ne pas casser le merge
         return pd.DataFrame({parent_var: df[parent_var].unique()})
 
     categorical = pd.get_dummies(df[categorical_cols])
@@ -289,30 +188,14 @@ def aggregate_client(df, group_vars, df_names):
     (group_vars[0]), puis au niveau du client (group_vars[1]). Combine les
     agrégations numériques et catégorielles à chaque niveau. Optimise la mémoire
     en supprimant les DataFrames intermédiaires après usage.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        DataFrame contenant les données à agréger avec au moins deux niveaux
-        hiérarchiques
-    group_vars : list of str
-        Liste de deux éléments : [variable_niveau_prêt, variable_niveau_client]
-    df_names : list of str
-        Liste de deux préfixes pour nommer les colonnes agrégées à chaque niveau
-
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame agrégé au niveau client avec toutes les statistiques calculées
-        sur les deux niveaux d'agrégation
     """
 
-    # 1. Agréger sur SK_ID_PREV (ou équivalent)
+    #Agréger sur SK_ID_PREV
     df_agg = agg_numeric(df, parent_var=group_vars[0], df_name=df_names[0])
     df_counts = agg_categorical(df, parent_var=group_vars[0], df_name=df_names[0])
     
-    # 2. Fusionner les deux (les deux ont la clé en colonne maintenant)
-    if df_counts.shape[1] > 1: # Si df_counts n'est pas vide
+    #Fusionner les deux 
+    if df_counts.shape[1] > 1: 
         df_by_loan = df_agg.merge(df_counts, on=group_vars[0], how='outer')
     else:
         df_by_loan = df_agg
@@ -321,21 +204,20 @@ def aggregate_client(df, group_vars, df_names):
     df_by_loan = reduce_mem_usage(df_by_loan)
     del df_agg, df_counts; gc.collect()
 
-    # 3. Ajouter SK_ID_CURR
+    #Ajouter SK_ID_CURR
     loan_to_client_id = df[[group_vars[0], group_vars[1]]].drop_duplicates(subset=[group_vars[0]])
     df_by_loan = df_by_loan.merge(loan_to_client_id, on=group_vars[0], how='left')
     
-    # 4. Retirer SK_ID_PREV pour la 2ème agrégation
+    #Retirer SK_ID_PREV pour la 2ème agrégation
     if group_vars[0] in df_by_loan.columns:
         df_by_loan = df_by_loan.drop(columns=[group_vars[0]])
         
-    # 5. Agréger sur SK_ID_CURR
+    #Agréger sur SK_ID_CURR
     df_by_client = agg_numeric(df_by_loan, parent_var=group_vars[1], df_name=df_names[1])
     
     del df, df_by_loan, loan_to_client_id; gc.collect()
     return df_by_client
 
-# --- 4. FONCTION PRINCIPALE ---
 
 def merge_and_clean(df_main, df_agg):
     """
@@ -345,21 +227,8 @@ def merge_and_clean(df_main, df_agg):
     le DataFrame agrégé en utilisant une clé commune. Privilégie 'SK_ID_CURR'
     comme clé de jointure si disponible, sinon utilise la première colonne commune
     trouvée. Libère la mémoire en supprimant le DataFrame agrégé après fusion.
-
-    Parameters
-    ----------
-    df_main : pandas.DataFrame
-        DataFrame principal auquel ajouter les colonnes agrégées
-    df_agg : pandas.DataFrame
-        DataFrame agrégé contenant les nouvelles features à fusionner
-
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame principal enrichi avec les colonnes du DataFrame agrégé.
-        Retourne df_main inchangé si aucune colonne commune n'est trouvée
     """
-    # Trouver le nom de la clé de jointure (c'est la colonne commune)
+    # Trouver le nom de la clé de jointure
     common_cols = list(set(df_main.columns) & set(df_agg.columns))
     if not common_cols:
         print("Erreur: Pas de clé commune pour le merge.")
@@ -381,30 +250,13 @@ def load_and_process_all_data(path_relative_to_root='datasets', debug=False):
     structure relationnelle (bureau->client, previous->mensuel->client),
     encode les variables catégorielles et optimise l'utilisation mémoire.
     Retourne les datasets train et test prêts pour la modélisation.
-
-    Parameters
-    ----------
-    path_relative_to_root : str, default='datasets'
-        Chemin relatif depuis la racine du projet vers le dossier contenant
-        les fichiers de données
-    debug : bool, default=False
-        Si True, charge uniquement un échantillon réduit des données pour
-        faciliter les tests et le débogage
-
-    Returns
-    -------
-    tuple of (pandas.DataFrame, pandas.DataFrame)
-        - app_train : DataFrame d'entraînement avec toutes les features agrégées
-          et la colonne TARGET
-        - app_test : DataFrame de test avec les mêmes features (sans TARGET)
-        Retourne (None, None) en cas d'erreur critique lors du chargement
     """
     
     script_dir = os.path.dirname(os.path.abspath(__file__))
     root_dir = os.path.join(script_dir, '..')
     final_data_path = os.path.join(root_dir, path_relative_to_root)
     
-    # 1. Charger APPLICATION
+    #Charger APPLICATION
     try:
         app_train = load_dataframe(final_data_path, 'application_train', debug)
         app_test = load_dataframe(final_data_path, 'application_test', debug)
@@ -505,17 +357,6 @@ def load_and_process_all_data(path_relative_to_root='datasets', debug=False):
 def missing_values_table(df):
     """
     Génère un tableau récapitulatif des valeurs manquantes.
-    
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        DataFrame à analyser
-        
-    Returns
-    -------
-    pandas.DataFrame
-        Tableau avec les colonnes ayant des valeurs manquantes,
-        triées par pourcentage décroissant
     """
     mis_val = df.isnull().sum()
     mis_val_percent = 100 * df.isnull().sum() / len(df)

@@ -11,10 +11,8 @@ import mlflow
 import optuna
 from optuna.integration.mlflow import MLflowCallback
 import lightgbm as lgb
-
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.metrics import confusion_matrix, roc_curve, auc, make_scorer
-
 from mlflow.models.signature import infer_signature
 try:
     from metrics import get_metrics, custom_business_cost
@@ -139,7 +137,7 @@ def train_cv_and_log(model, X, y, experiment_name, run_name, n_splits=5,
 
         mlflow.log_params(model.get_params())
         
-        print("  >> Entraînement final sur l'ensemble du dataset (Production)...")
+        print("  >> Entraînement final sur l'ensemble du dataset")
         model.fit(X, y)
         
         if isinstance(X, pd.DataFrame):
@@ -299,10 +297,6 @@ def optimize_hyperparameters_xgboost(X_train, y_train, experiment_name, n_trials
     )
 
 
-
-
-
-
     def objective(trial):
         param = {
             'objective': 'binary:logistic',
@@ -380,9 +374,6 @@ def optimize_hyperparameters_xgboost(X_train, y_train, experiment_name, n_trials
 
 
 
-
-
-
 def plot_business_cost_threshold(y_true, y_proba):
     """Trace la courbe du coût métier vs seuil."""
     thresholds = np.arange(0.01, 1.0, 0.01)
@@ -401,9 +392,6 @@ def plot_business_cost_threshold(y_true, y_proba):
     plt.xlabel("Seuil")
     plt.ylabel("Coût Métier")
     return plt.gcf(), best_thresh
-
-
-
 
 
 
