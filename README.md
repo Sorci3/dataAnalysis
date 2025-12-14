@@ -31,7 +31,7 @@ docker run -p 1234:1234 credit-scoring-model
 ```
 
 # Seuil métier
-Le seuil métier optimal est le point d'équilibre précis qui permet à la banque de maximiser sa rentabilité. Ce seuil est la barrière que l'on fixe pour prendre la décision (probabilité > Seuil $\rightarrow$ Refus | probabilité < Seuil $\rightarrow$ Accord).Dans notre notebook 02_model_training.ipynb, nous avons déterminé que le modèle offrant le meilleur compromis est LightGBM (une fois optimisé). Grâce à lui, nous obtenons un seuil optimal de 0,51 pour un coût métier de 29 761. Par conséquent, si un client a une probabilité de défaut de 47 %, il doit être refusé, alors que s'il a une probabilité de 45 %, il doit être accepté.
+Le seuil métier optimal est le point d'équilibre précis qui permet à la banque de maximiser sa rentabilité. Ce seuil est la barrière que l'on fixe pour prendre la décision (probabilité > Seuil $\rightarrow$ Refus | probabilité < Seuil $\rightarrow$ Accord).Dans notre notebook 02_model_training.ipynb, nous avons déterminé que le modèle offrant le meilleur compromis est LightGBM (une fois optimisé). Grâce à lui, nous obtenons un seuil optimal de 0,51 pour un coût métier de 29 761. Par conséquent, si un client a une probabilité de défaut de 52 %, il doit être refusé, alors que s'il a une probabilité de 50 %, il doit être accepté.
 
 # Structure du projet
 PROJET-CREDIT-SCORING/
