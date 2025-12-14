@@ -8,3 +8,4 @@ seaborn
 optuna
 optuna-integration
 xgboost
+shap
